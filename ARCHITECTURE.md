@@ -2,15 +2,15 @@
 
 ## Section 1: The Double Entry Constraint
 
-Write down: "Every transaction must balance to zero. Sum(Debits) - Sum(Credits) == 0. If not, return TransactionError::AccountingImbalance."
+Every transaction must balance to zero. `Sum(Debits) - Sum(Credits) == 0`. If not, the system must return `TransactionError::AccountingImbalance`.
 
 ## Section 2: Concurrency
 
-Write down: "We will use Optimistic Locking (Versioning) for account balances to avoid database deadlocks."
+The system uses Optimistic Locking (Versioning) for account balances to avoid database deadlocks and ensure high throughput.
 
 ## Section 3: The Catalog
 
-Write down: "Products are Data, not Code. A 'Gold Saver' is just a JSON configuration, not a hard-coded class."
+Products are treated as data, not code. For instance, a 'Gold Saver' is defined as a JSON configuration rather than a hard-coded class.
 
 ## Dataflow Diagram
 
