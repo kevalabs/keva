@@ -112,3 +112,7 @@ To make this diagram actionable, a single action is traced below: A customer dep
   - It asserts `Sum(Debits) == Sum(Credits)`.
   - If the math is perfect, it attempts to write to PostgreSQL using Optimistic Concurrency Control.
   - If successful, it returns an `Ok(())` back up the chain.
+
+## 9. Architecture Decision Records (ADRs)
+
+- [ADR 0001: Adopt Optimistic Concurrency Control (OCC) over Event Sourcing for Core Ledger](./adr/0001-use-occ-over-event-sourcing.md)
