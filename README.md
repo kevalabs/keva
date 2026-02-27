@@ -25,6 +25,8 @@ Keva is organized as a Rust Workspace with three distinct engines:
 
 3. **Accounts Engine** (`keva-accounts`): The state engine that links Customers to Products.
 
+For a deep dive into the system capabilities, data flow, and concurrency model, please read the [Core Architecture & Dataflow Documentation](./docs/architecture/README.md).
+
 ## Status
 
 🚧 Under Active Development by KevaLabs.
