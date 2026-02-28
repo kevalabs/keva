@@ -228,7 +228,27 @@ sequenceDiagram
     API-->>App: 4,000 NPR
 ```
 
-## 10. Architecture Decision Records (ADRs)
+## 10. In-Memory Reference Caching (PostgreSQL NOTIFY)
+
+To achieve high throughput for ledger mutations, reference data (product rules,
+fees, limits) is cached entirely in-memory within the Rust API nodes, avoiding
+repeated database lookups on the hot path.
+
+- **The Cache:** The active Bitemporal product catalog is loaded into a
+  high-performance, concurrent Rust in-memory data structure on boot.
+- **The Invalidation Mechanism:** The system perfectly synchronizes this cache
+  across all distributed nodes without external software like Redis. It
+  leverages native PostgreSQL `LISTEN/NOTIFY`.
+  - A database trigger on the `products` table executes `NOTIFY product_updates`
+    upon any change.
+  - Dedicated asynchronous connections in the API nodes receive this payload and
+    atomically hot-swap the updated rule in RAM.
+
+For more details, see
+[ADR 0003](./adr/0003-in-memory-caching-postgres-notify.md).
+
+## 11. Architecture Decision Records (ADRs)
 
 - [ADR 0001: Adopt Optimistic Concurrency Control (OCC) over Event Sourcing for Core Ledger](./adr/0001-use-occ-over-event-sourcing.md)
 - [ADR 0002: Adopt Database Read/Write Splitting over Strict CQRS](./adr/0002-read-write-splitting-over-cqrs.md)
+- [ADR 0003: In-Memory Reference Caching via PostgreSQL NOTIFY](./adr/0003-in-memory-caching-postgres-notify.md)
