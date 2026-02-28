@@ -64,6 +64,17 @@ We are proceeding with **Option 3: Local In-Memory Cache with PostgreSQL
   to the local RAM map, ensuring in-flight transactions are never evaluating
   partial rule states.
 
+### 4.1 Strict Usage Boundaries
+
+To prevent overloading the PostgreSQL notification queue, `LISTEN/NOTIFY` is
+strictly governed by the following rules:
+
+- **Use PostgreSQL NOTIFY for:** Low-frequency, globally critical state changes
+  (Product Rules, System Halts, Feature Toggles).
+- **Never use PostgreSQL NOTIFY for:** High-frequency, transient, user-specific
+  data (Rate limiting, Session TTLs, Cache invalidation of individual
+  transactions).
+
 ## 5. Consequences
 
 - **Positive:** Unlocks 5,000+ TPS by entirely removing reference data lookups

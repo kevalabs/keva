@@ -244,6 +244,14 @@ repeated database lookups on the hot path.
   - Dedicated asynchronous connections in the API nodes receive this payload and
     atomically hot-swap the updated rule in RAM.
 
+### Strict Usage Boundaries (NOTIFY)
+
+- **Use PostgreSQL NOTIFY for:** Low-frequency, globally critical state changes
+  (Product Rules, System Halts, Feature Toggles).
+- **Never use PostgreSQL NOTIFY for:** High-frequency, transient, user-specific
+  data (Rate limiting, Session TTLs, Cache invalidation of individual
+  transactions).
+
 For more details, see
 [ADR 0003](./adr/0003-in-memory-caching-postgres-notify.md).
 
