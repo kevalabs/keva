@@ -183,49 +183,49 @@ infrastructure complexity (See ADR 0002).
   of **PostgreSQL Read Replicas**, synchronized via native binary streaming
   replication.
 
-### The "Primary-Read-After-Write" Rule
+### Stateless Read-After-Write Consistency (HMAC)
 
 To prevent user panic caused by microsecond replication lag (e.g., a user
 transfers money and instantly checks their balance before the replica updates),
-the API Gateway enforces "Sticky Routing":
+Keva uses stateless cryptographic time-bound tokens rather than sticky sessions
+or external caches (See
+[ADR 0004](./adr/0004-stateless-read-after-write-hmac.md)).
 
-1. When a user successfully mutates state (Write), the API caches a
-   `Recently_Written` flag (TTL: 3 seconds) for that specific user session.
-2. Any subsequent balance read requests from that user within the 3-second
-   window are intercepted and routed directly to the Primary Node.
-3. Once the TTL expires, read traffic safely defaults back to the Replica pool.
+1. **The Write:** When a user successfully mutates state, the API signs the
+   server timestamp using HMAC-SHA256 and returns `X-Keva-Sync-Token` in the
+   HTTP header.
+2. **The Read:** Any subsequent balance read requests from that user include the
+   `X-Keva-Sync-Token`. The API validates the HMAC signature and the TTL.
+3. **The Route:** If the token is valid and `< 3 seconds` old, the query routes
+   to the Primary node. Otherwise, it routes to the Replica pool.
 
 ```mermaid
 sequenceDiagram
     participant App as Mobile App
     participant API as Keva API Gateway
-    participant Cache as Session Cache (3s TTL)
     participant Primary as PostgreSQL (Primary)
     participant Replica as PostgreSQL (Replica)
 
     %% Scenario 1: Standard Passive Read
-    App->>API: GET /balance
-    API->>Cache: Check 'Recently_Written' flag
-    Cache-->>API: False (Not found)
+    App->>API: GET /balance (No Token)
     API->>Replica: SELECT balance FROM accounts
     Replica-->>API: 5,000 NPR
-    API-->>App: 5,000 NPR
+    API-->>App: HTTP 200 (5,000 NPR)
 
-    %% Scenario 2: Mutation and Sticky Read
+    %% Scenario 2: Mutation and HMAC Read
     App->>API: POST /transfer (1,000 NPR)
     API->>Primary: INSERT posting, UPDATE accounts
     Primary-->>API: Success
-    API->>Cache: Set 'Recently_Written=True' (TTL: 3s)
-    API-->>App: 200 OK
+    Note over API: Generate HMAC signature of current timestamp
+    API-->>App: HTTP 200 (Header: X-Keva-Sync-Token)
 
     Note over App, Replica: User instantly checks balance
 
-    App->>API: GET /balance
-    API->>Cache: Check 'Recently_Written' flag
-    Cache-->>API: True (Flag is active)
-    API->>Primary: SELECT balance FROM accounts (Sticky Route)
+    App->>API: GET /balance (Header: X-Keva-Sync-Token)
+    Note over API: Validate HMAC Signature & TTL (< 3s)
+    API->>Primary: SELECT balance FROM accounts (Sync Route)
     Primary-->>API: 4,000 NPR
-    API-->>App: 4,000 NPR
+    API-->>App: HTTP 200 (4,000 NPR)
 ```
 
 ## 10. In-Memory Reference Caching (PostgreSQL NOTIFY)
@@ -260,3 +260,4 @@ For more details, see
 - [ADR 0001: Adopt Optimistic Concurrency Control (OCC) over Event Sourcing for Core Ledger](./adr/0001-use-occ-over-event-sourcing.md)
 - [ADR 0002: Adopt Database Read/Write Splitting over Strict CQRS](./adr/0002-read-write-splitting-over-cqrs.md)
 - [ADR 0003: In-Memory Reference Caching via PostgreSQL NOTIFY](./adr/0003-in-memory-caching-postgres-notify.md)
+- [ADR 0004: Stateless Read-After-Write Consistency via Cryptographic Headers](./adr/0004-stateless-read-after-write-hmac.md)
