@@ -261,3 +261,4 @@ For more details, see
 - [ADR 0002: Adopt Database Read/Write Splitting over Strict CQRS](./adr/0002-read-write-splitting-over-cqrs.md)
 - [ADR 0003: In-Memory Reference Caching via PostgreSQL NOTIFY](./adr/0003-in-memory-caching-postgres-notify.md)
 - [ADR 0004: Stateless Read-After-Write Consistency via Cryptographic Headers](./adr/0004-stateless-read-after-write-hmac.md)
+- [ADR 0005: Immutable Ledger Queries for EOD Balance Calculation](./adr/0005-immutable-ledger-queries-for-eod.md)
