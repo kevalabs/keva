@@ -168,7 +168,7 @@ deposits 1,000 NPR.
     Concurrency Control.
   - If successful, it returns an `Ok(())` back up the chain.
 
-## 5. Scalable Balance Retrieval (Read/Write Splitting)
+## 9. Scalable Balance Retrieval (Read/Write Splitting)
 
 In retail banking, passive read traffic (users refreshing their balance) often
 accounts for over 90% of database load. Keva utilizes native PostgreSQL
@@ -228,7 +228,7 @@ sequenceDiagram
     API-->>App: 4,000 NPR
 ```
 
-## 6. Architecture Decision Records (ADRs)
+## 10. Architecture Decision Records (ADRs)
 
 - [ADR 0001: Adopt Optimistic Concurrency Control (OCC) over Event Sourcing for Core Ledger](./adr/0001-use-occ-over-event-sourcing.md)
 - [ADR 0002: Adopt Database Read/Write Splitting over Strict CQRS](./adr/0002-read-write-splitting-over-cqrs.md)
