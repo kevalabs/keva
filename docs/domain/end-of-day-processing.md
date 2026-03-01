@@ -53,3 +53,23 @@ processing engine implements a strict priority queue.
   morning.
 - **Priority 2:** All `DORMANT` accounts are batched and processed only after
   the active queue is entirely exhausted.
+
+## 5. Hold / Authorization Expiration Sweep
+
+**Business Context:** When a merchant places a pre-authorization hold on an
+account, it reduces the Available Balance without altering the Current Balance.
+If a merchant fails to capture the hold (e.g., a cancelled hotel reservation),
+the system must automatically release the funds to prevent permanent customer
+lock-up.
+
+**Operational Flow:**
+Every hold record carries an `expires_at` timestamp dictated by network rules or
+the Keva product catalog.
+
+- **The Trigger:** A nightly End-of-Day background worker executes an expiration
+  sweep.
+- **The Action:** The worker deletes (or marks as expired) any record in the
+  `account_holds` table where the expiration timestamp has passed.
+- **The Result:** The customer's Available Balance instantly and silently
+  increases without requiring any modifications to the core `accounts` ledger or
+  generating accounting journal entries.
