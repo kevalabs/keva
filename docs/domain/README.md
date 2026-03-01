@@ -13,3 +13,7 @@ lifecycle workflows for the Keva Core Banking System.
   - Defines the mathematical distinction between daily Interest Accrual
     (liability recognition) and periodic Capitalization (customer payout), as
     well as the 24/7 rolling cut-off rules.
+
+- [Balance Mechanics & Ledger Math](./balance-mechanics.md)
+  - Defines the distinct realities of Current Balance vs. Available Balance
+    and standard hold/authorization mechanics.
