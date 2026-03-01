@@ -60,3 +60,36 @@ sequenceDiagram
 - **Atomic Execution:** Steps 2, 3, and 4 must be executed within a single
   PostgreSQL database transaction to ensure the ledger is never left in a
   partially settled state if the API crashes during the closure.
+
+## 2. Account Dormancy
+
+**Business Context:** To comply with regulatory guidelines (e.g., NRB) and
+prevent fraud on abandoned funds, accounts must be frozen after a prolonged
+period of inactivity. A dormant account rejects all outgoing customer-initiated
+debits (withdrawals, POS swipes, transfers) until the customer completes KYC
+verification at a branch.
+
+**The Trigger:** Dormancy is calculated based strictly on the
+`last_customer_activity_at` timestamp.
+
+- System-generated postings (Interest Capitalization, Fee Deductions, Tax
+  Withholdings) **do not** update this timestamp.
+- Customer-initiated mutations (Deposits, Withdrawals, Inward Transfers) **do**
+  update this timestamp.
+
+**The State Transition:** An asynchronous nightly background job sweeps the
+`accounts` table. If
+`Current Date - last_customer_activity_at > Product.dormancy_days`, the account
+status is updated from `ACTIVE` to `DORMANT`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> ACTIVE: Account Opened
+    ACTIVE --> ACTIVE: Customer Transaction (Reset Clock)
+    ACTIVE --> ACTIVE: System Transaction (Clock Ignored)
+    ACTIVE --> DORMANT: Nightly Sweep (Inactivity > 180 days)
+    DORMANT --> DORMANT: Customer Transaction (REJECTED)
+    DORMANT --> DORMANT: System Transaction (ALLOWED)
+    DORMANT --> ACTIVE: Manual KYC Unfreeze by Branch Manager
+    DORMANT --> CLOSED: Account Closed
+```
