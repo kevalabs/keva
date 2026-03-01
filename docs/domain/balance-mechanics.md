@@ -15,7 +15,6 @@ account at any given microsecond.
 
 - **Calculation:** It is the strict sum of all historical `postings` tied to the
   account.
-
 - **Usage:** Used for End-of-Day interest accrual, official bank statements, and
   regulatory reporting. It does not fluctuate based on pending authorizations.
 
@@ -24,17 +23,16 @@ account at any given microsecond.
 The Available Balance represents the user's immediate purchasing power.
 
 - **Calculation:** `Current Balance - (Pending Holds / Liens) + (Overdraft Limit)`
-
 - **Usage:** Used strictly for transaction validation. When a user attempts to
   withdraw cash or swipe a finPOS terminal, the core banking engine evaluates
   the request exclusively against the Available Balance.
 
-## 2. The Hold / Authorization Mechanism
+## 2. The Ledger Isolation Strategy (Holds)
 
-When a merchant (e.g., a hotel or rental car agency) requests a
-pre-authorization, the funds are not immediately moved out of the account,
-meaning the **Current Balance remains unchanged**.
+Pending authorizations are never stored as a numeric column on the `accounts`
+table. They are isolated in a separate `account_holds` table.
 
-Instead, a "Hold" is placed on the account. This hold instantly reduces the
-**Available Balance**, ensuring the user cannot accidentally double-spend those
-funds before the merchant settles the final transaction a few days later.
+- **Why:** This strictly isolates temporary metadata mutations from core ledger
+  mutations. It guarantees that the Optimistic Concurrency Control (OCC)
+  `version` on the `accounts` table only increments when actual settled money
+  moves, preventing false-positive transaction failures at the POS terminal.
