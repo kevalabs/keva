@@ -24,18 +24,18 @@ guarantees of Rust.
 - **Correctness First**: Uses strict typing to prevent "Floating Point" errors
   and ensures atomic state transitions.
 
-## Architecture (The Triad)
+## Architecture (The Tetrad)
 
-Keva is organized as a Rust Workspace with three distinct engines:
+Keva is organized as a Rust Workspace with four distinct engines:
 
-1. **Ledger Engine** (`keva-ledger`): The immutable, double-entry accounting
+1. **API Gateway** (`keva-api`): The stateless transport layer handling Traefik
+   load balancing, HMAC routing, and request validation.
+2. **Ledger Engine** (`keva-ledger`): The immutable, double-entry accounting
    engine.
-
-2. **Catalog Engine** (`keva-catalog`): The product definition engine (Interest
-   Rules, Fees, Limits).
-
-3. **Accounts Engine** (`keva-accounts`): The state engine that links Customers
-   to Products.
+3. **Catalog Engine** (`keva-catalog`): The bitemporal product definition
+   engine (Interest Rules, Fees, Limits).
+4. **Accounts Engine** (`keva-accounts`): The orchestrator that links
+   Customers to Products and enforces constraints.
 
 ## Documentation
 

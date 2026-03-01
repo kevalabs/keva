@@ -61,3 +61,14 @@ Before mutating any state, the API calculates a SHA-256 hash of the JSON body.
 If the key already exists in the database, the API compares the incoming hash to
 the stored hash to either replay the saved response or throw a strict HTTP 409
 Conflict.
+
+## 6. Table Maintenance & Pruning Strategy
+
+To prevent the `idempotency_keys` table from degrading database performance over
+time, Keva employs a 24-Hour Sliding Window strategy.
+
+1. **API Expiration:** The API gateway rejects any incoming request payload
+   containing a timestamp older than 24 hours.
+
+2. **EOD Pruning:** A nightly background worker executes a sweep, safely
+   deleting all rows where `created_at < NOW() - INTERVAL '24 hours'`.
