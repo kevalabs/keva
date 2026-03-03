@@ -88,3 +88,30 @@ the EOD processing reverses. The customer now owes the bank interest.
   capitalization event, moving the accumulated debt from the
   `Interest Receivable GL` directly against the customer's `Current Balance`,
   driving it further negative.
+
+## 7. Account-Level Overrides (Negotiated Rates)
+
+**Business Context:** High-net-worth individuals or corporate clients frequently
+negotiate custom interest rates (e.g., an Enterprise Deposit receiving 12%
+instead of the standard 10%). To prevent product catalog bloat, Keva strictly
+forbids cloning products for individual customers.
+
+Instead, Keva utilizes an "Account-Level Override" pattern. The `keva-catalog`
+defines the standard blueprint and the maximum allowable negotiated ceiling,
+while the specific negotiated rate is stored directly on the customer's account
+instance.
+
+**Operational Flow & EOD Impact:**
+Custom rates are temporal contracts. Every account-level override must possess
+an `expires_at` date.
+
+When the End-of-Day (EOD) batch workers execute the daily interest accrual, they
+follow a strict resolution hierarchy:
+
+1. **The Override Check:** The worker queries if the specific account has an
+   active, unexpired interest override.
+2. **The Custom Path:** If an override exists and `Current Date < expires_at`,
+   the worker calculates the daily interest using the negotiated rate.
+3. **The Standard Path (Fallback):** If no override exists, or if the override
+   has expired, the worker automatically falls back to querying the RAM cache
+   for the base rate defined in the `keva-catalog`.
