@@ -73,3 +73,18 @@ the Keva product catalog.
 - **The Result:** The customer's Available Balance instantly and silently
   increases without requiring any modifications to the core `accounts` ledger or
   generating accounting journal entries.
+
+## 6. Negative Balance (Overdraft) Interest Processing
+
+When an account's Current Balance falls below zero, the mathematical polarity of
+the EOD processing reverses. The customer now owes the bank interest.
+
+- **Daily Accrual:** The EOD batch engine calculates the penalty interest (e.g.,
+  18% APR) on the negative balance. This is posted as a Debit to
+  `Interest Receivable GL` and a Credit to `Interest Revenue GL`. The customer's
+  actual account balance is not affected during daily accrual.
+- **Capitalization (Billing):** Based strictly on the billing frequency defined
+  in the `keva-catalog` Product rules (e.g., Monthly), the system executes a
+  capitalization event, moving the accumulated debt from the
+  `Interest Receivable GL` directly against the customer's `Current Balance`,
+  driving it further negative.

@@ -36,3 +36,18 @@ table. They are isolated in a separate `account_holds` table.
   mutations. It guarantees that the Optimistic Concurrency Control (OCC)
   `version` on the `accounts` table only increments when actual settled money
   moves, preventing false-positive transaction failures at the POS terminal.
+
+## 3. Overdraft Limits & Transaction Validation
+
+An Overdraft Limit represents a pre-approved line of credit attached directly to
+a deposit account, allowing the Current Balance to drop below zero.
+
+- **Validation Formula:**
+  `Available Balance = Current Balance - Pending Holds + Overdraft Limit`.
+- **Data Placement:** While the `keva-catalog` defines if a product supports
+  overdrafts and sets the maximum ceiling, the exact `overdraft_limit` is an
+  underwriting decision and is stored directly on the `accounts` table per user.
+- **Transaction Flow:** If a transaction brings the Current Balance below zero,
+  the core ledger strictly verifies that the resulting negative balance does
+  not exceed the user's specific `overdraft_limit` before committing the
+  Optimistic Concurrency Control (OCC) write.
