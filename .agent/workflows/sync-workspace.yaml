@@ -1,0 +1,11 @@
+name: Sync Workspace & Cleanup
+description: Switches to the main branch, pulls the latest integrated code, and deletes any local feature branches that have been successfully merged.
+steps:
+  - name: Sync Main and Prune
+    prompt: |
+      You must clean up the local Git repository by executing the following terminal commands strictly in order:
+      1. Switch to the main branch: `git checkout main`
+      2. Pull the latest remote changes: `git pull origin main`
+      3. Prune stale remote-tracking branches: `git fetch -p`
+      4. Safely delete all local branches that have been merged into main (excluding the main branch itself): 
+         `git branch --merged | grep -v "\*" | grep -v "main" | xargs -n 1 git branch -d`
