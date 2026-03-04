@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "keva-api",
+    "keva-accounts",
+    "keva-catalog",
+    "keva-ledger"
+]
+resolver = "2"
