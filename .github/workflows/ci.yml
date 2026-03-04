@@ -1,0 +1,64 @@
+name: Keva Core CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+# Cancel in-progress runs if a developer pushes a new commit to the same PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Code Quality (Fmt & Clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        
+      - name: Enforce Formatting
+        run: cargo fmt --all -- --check
+        
+      - name: Enforce Clippy (Deny Warnings)
+        run: cargo clippy --workspace -- -D warnings
+
+  test-and-coverage:
+    name: Mathematical Integrity & Coverage
+    runs-on: ubuntu-latest
+    # Wait for the lint job to pass before spinning up this heavier job
+    needs: lint 
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+        
+      - name: Run Standard Tests
+        run: cargo test --workspace
+        
+      - name: Enforce 100% Core Ledger Coverage
+        # This explicitly fails the build if the pure math crates drop below 100%
+        run: |
+          cargo llvm-cov --no-report --workspace
+          cargo llvm-cov report --fail-under-lines 100 -p keva-ledger -p keva-catalog
