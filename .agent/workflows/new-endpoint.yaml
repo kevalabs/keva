@@ -1,0 +1,11 @@
+name: Generate New API Endpoint
+description: Standardized workflow for creating a new REST endpoint in the keva-api crate.
+steps:
+  - name: Define Payload
+    prompt: "Create the request and response `serde` structs for the endpoint. Ensure all monetary fields use `i64`."
+  - name: Implement Handler
+    prompt: "Write the Axum handler function. Ensure it extracts the Idempotency-Key header for POST/PUT requests."
+  - name: Link Orchestrator
+    prompt: "Write the logic to map the HTTP payload to the corresponding domain command in `keva-accounts`."
+  - name: Write Tests
+    prompt: "Generate a unit test for the HTTP handler mocking the `keva-accounts` response."
