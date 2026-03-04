@@ -1,8 +1,3 @@
 [workspace]
-members = [
-    "keva-api",
-    "keva-accounts",
-    "keva-catalog",
-    "keva-ledger"
-]
+members = ["crates/*"]
 resolver = "2"
