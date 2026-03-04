@@ -1,0 +1,34 @@
+name: Start New Task
+description: Enforces a clean workspace, syncs the main branch, manages the GitHub issue, and creates a standardized feature branch.
+parameters:
+  - name: task_type
+    description: The Conventional Commit type (e.g., feat, fix, refactor, docs).
+    required: true
+  - name: task_title
+    description: A short, descriptive title (e.g., "Implement Overdraft Cache").
+    required: true
+  - name: issue_number
+    description: The existing GitHub issue number (Optional. Leave blank to auto-create).
+    required: false
+steps:
+  - name: Enforce Clean Workspace
+    prompt: |
+      Execute `git status --porcelain`. 
+      If the output is not empty (meaning there are uncommitted changes), ABORT this workflow immediately. Instruct the user to commit, stash, or drop their changes before starting a new task. Do not proceed to the next step.
+  - name: Sync Primary Branch
+    prompt: |
+      Execute the following terminal commands to ensure the baseline is up to date:
+      1. `git checkout main`
+      2. `git pull origin main`
+  - name: Issue Management
+    prompt: |
+      You must establish a valid issue number before creating a branch.
+      1. If `#{issue_number}` is provided, use `gh issue view {issue_number}` to verify it.
+      2. If no `issue_number` is provided, create one: 
+         `gh issue create --title "[{task_type}] {task_title}" --body "Automated tracking for {task_title}" --assignee "@me"`
+      3. Extract and remember the exact issue number from the terminal output.
+  - name: Standardized Branch Creation
+    prompt: |
+      1. Convert the `{task_title}` into a lowercase, hyphen-separated string (e.g., "Overdraft Cache" -> "overdraft-cache").
+      2. Construct the branch name using the Keva standard: `{task_type}/<issue_number>-<formatted-title>`.
+      3. Execute the branch creation: `git checkout -b <branch-name>`
