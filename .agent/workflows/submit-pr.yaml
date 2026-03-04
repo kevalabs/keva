@@ -1,0 +1,31 @@
+name: Generate Standardized Pull Request
+description: Automates issue verification/creation, commit formatting, and PR generation using the GitHub CLI.
+parameters:
+  - name: feature_description
+    description: A short description of the work (e.g., "Add overdraft limits to keva-accounts").
+    required: true
+  - name: issue_number
+    description: The existing GitHub issue number (Optional. Leave blank to auto-create).
+    required: false
+steps:
+  - name: Issue Verification & Creation
+    prompt: |
+      You must establish a valid issue number before proceeding.
+      1. If `#{issue_number}` is provided, use the terminal command `gh issue view {issue_number}` to verify it exists.
+      2. If no `issue_number` is provided, or if the view command fails, you MUST create a new issue. 
+      3. Execute: `gh issue create --title "{feature_description}" --body "Automated issue tracking for {feature_description}" --assignee "@me"`
+      4. Extract and remember the new issue number from the terminal output.
+  - name: Analyze Changes
+    prompt: "Review the current uncommitted Git diff in the workspace."
+  - name: Generate and Execute Commit
+    prompt: |
+      Generate a single Conventional Commit message summarizing the diff. 
+      Use the verified/created issue number. The scope MUST match the crate modified. 
+      Format: `feat(keva-accounts): [#<issue_number>] {feature_description}`.
+      Execute the `git commit -m "..."` command in the terminal.
+  - name: Push and Create PR
+    prompt: |
+      1. Push the current branch to the origin using `git push -u origin HEAD`.
+      2. Create the Pull Request using the GitHub CLI: 
+         `gh pr create --title "{feature_description}" --body "Closes #<issue_number>. Automated PR generation."`
+         
