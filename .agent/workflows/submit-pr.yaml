@@ -15,6 +15,10 @@ steps:
       2. If no `issue_number` is provided, or if the view command fails, you MUST create a new issue. 
       3. Execute: `gh issue create --title "{feature_description}" --body "Automated issue tracking for {feature_description}" --assignee "@me"`
       4. Extract and remember the new issue number from the terminal output.
+  - name: Run Code Quality Checks
+    prompt: |
+      Ensure the code is linted and apply auto-fixes by executing the following in the terminal:
+      `cargo clippy --fix --allow-dirty --allow-staged`
   - name: Analyze Changes
     prompt: "Review the current uncommitted Git diff in the workspace."
   - name: Generate and Execute Commit
