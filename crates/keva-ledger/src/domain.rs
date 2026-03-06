@@ -383,7 +383,7 @@ mod tests {
     proptest! {
         #[test]
         fn property_test_balance_integrity(
-            mut initial_balance in 100..10_000i64,
+            initial_balance in 100..10_000i64,
             transfer_amount in 1..100i64
         ) {
              let account_id_1 = Uuid::new_v4();
