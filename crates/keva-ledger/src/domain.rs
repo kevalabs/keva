@@ -120,8 +120,12 @@ pub fn apply_journal_entry(
         let state = states.get(&account_id).unwrap();
         // Postcondition 2: Limit Enforcement using available_balance()
         let available = state.available_balance()?;
-        
-        if available.checked_add(impact).ok_or(LedgerError::ArithmeticOverflow)? < 0 {
+
+        if available
+            .checked_add(impact)
+            .ok_or(LedgerError::ArithmeticOverflow)?
+            < 0
+        {
             return Err(LedgerError::InsufficientFunds);
         }
     }
@@ -150,7 +154,10 @@ pub fn apply_journal_entry(
         entry.postings.iter().map(|p| p.account_id).collect();
     for account_id in mutated_accounts {
         let state = states.get_mut(&account_id).unwrap();
-        state.version = state.version.checked_add(1).ok_or(LedgerError::ArithmeticOverflow)?;
+        state.version = state
+            .version
+            .checked_add(1)
+            .ok_or(LedgerError::ArithmeticOverflow)?;
     }
 
     Ok(states)
