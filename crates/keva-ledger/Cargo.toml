@@ -8,3 +8,9 @@ authors.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+chrono.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+quickcheck = "1.1.0"
+
+[dev-dependencies]
+proptest = "1.10.0"
