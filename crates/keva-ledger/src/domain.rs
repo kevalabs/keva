@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -15,8 +15,8 @@ pub enum LedgerError {
     ImbalancedJournalEntry,
     #[error("Insufficient funds")]
     InsufficientFunds,
-    #[error("Account not found")]
-    AccountNotFound,
+    #[error("Ledger not found")]
+    LedgerNotFound,
     #[error("Zero amount posting")]
     ZeroAmountPosting,
     #[error("Arithmetic overflow")]
@@ -40,11 +40,35 @@ impl LedgerState {
             .checked_add(self.overdraft_limit)
             .ok_or(LedgerError::ArithmeticOverflow)
     }
+
+    /// Applies a posting to update the current balance.
+    fn apply_posting(&mut self, posting: &Posting) -> Result<(), LedgerError> {
+        self.current_balance = match posting.direction {
+            Direction::Debit => self
+                .current_balance
+                .checked_sub(posting.amount)
+                .ok_or(LedgerError::ArithmeticOverflow)?,
+            Direction::Credit => self
+                .current_balance
+                .checked_add(posting.amount)
+                .ok_or(LedgerError::ArithmeticOverflow)?,
+        };
+        Ok(())
+    }
+
+    /// Increments the version for optimistic concurrency control.
+    fn increment_version(&mut self) -> Result<(), LedgerError> {
+        self.version = self
+            .version
+            .checked_add(1)
+            .ok_or(LedgerError::ArithmeticOverflow)?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Posting {
-    pub account_id: Uuid,
+    pub ledger_id: Uuid,
     pub amount: i64,
     pub direction: Direction,
     pub remark: Option<String>,
@@ -58,20 +82,20 @@ pub struct JournalEntry {
     pub postings: Vec<Posting>,
 }
 
-pub fn apply_journal_entry(
-    entry: &JournalEntry,
-    mut states: HashMap<Uuid, LedgerState>,
-) -> Result<HashMap<Uuid, LedgerState>, LedgerError> {
-    // Invariant 1: Positive Amounts
-    if entry.postings.iter().any(|p| p.amount <= 0) {
+/// Validates that all posting amounts are positive (Invariant 1).
+fn validate_positive_amounts(postings: &[Posting]) -> Result<(), LedgerError> {
+    if postings.iter().any(|p| p.amount <= 0) {
         return Err(LedgerError::ZeroAmountPosting);
     }
+    Ok(())
+}
 
-    // Invariant 2: Double-Entry Balance
+/// Validates that total debits equal total credits (Invariant 2: Double-Entry Balance).
+fn validate_double_entry_balance(postings: &[Posting]) -> Result<(), LedgerError> {
     let mut total_debit: i64 = 0;
     let mut total_credit: i64 = 0;
 
-    for p in &entry.postings {
+    for p in postings {
         match p.direction {
             Direction::Debit => {
                 total_debit = total_debit
@@ -89,21 +113,26 @@ pub fn apply_journal_entry(
     if total_debit != total_credit {
         return Err(LedgerError::ImbalancedJournalEntry);
     }
+    Ok(())
+}
 
-    // Precondition 2: Accounts Must Exist
-    // Ensure all accounts referenced in postings exist in states
-    if entry
-        .postings
-        .iter()
-        .any(|p| !states.contains_key(&p.account_id))
-    {
-        return Err(LedgerError::AccountNotFound);
+/// Validates that all referenced ledgers exist in the states map.
+fn validate_ledgers_exist(
+    postings: &[Posting],
+    states: &HashMap<Uuid, LedgerState>,
+) -> Result<(), LedgerError> {
+    if postings.iter().any(|p| !states.contains_key(&p.ledger_id)) {
+        return Err(LedgerError::LedgerNotFound);
     }
+    Ok(())
+}
 
-    // Apply net mutations to verify Precondition 3 / Postcondition 2 (Limits) early
+/// Calculates the net impact (sum of credits minus debits) for each ledger.
+fn calculate_net_impacts(postings: &[Posting]) -> Result<HashMap<Uuid, i64>, LedgerError> {
     let mut net_impacts: HashMap<Uuid, i64> = HashMap::new();
-    for posting in &entry.postings {
-        let current_impact = net_impacts.get(&posting.account_id).copied().unwrap_or(0);
+
+    for posting in postings {
+        let current_impact = net_impacts.get(&posting.ledger_id).copied().unwrap_or(0);
         let new_impact = match posting.direction {
             Direction::Debit => current_impact
                 .checked_sub(posting.amount)
@@ -112,53 +141,94 @@ pub fn apply_journal_entry(
                 .checked_add(posting.amount)
                 .ok_or(LedgerError::ArithmeticOverflow)?,
         };
-        net_impacts.insert(posting.account_id, new_impact);
+        net_impacts.insert(posting.ledger_id, new_impact);
     }
 
-    // Verify limit enforcement before actual mutation
-    for (account_id, impact) in net_impacts {
-        let state = states.get(&account_id).unwrap();
-        // Postcondition 2: Limit Enforcement using available_balance()
+    Ok(net_impacts)
+}
+
+/// Verifies that all ledgers have sufficient funds after applying the net impacts.
+fn verify_sufficient_funds(
+    net_impacts: &HashMap<Uuid, i64>,
+    states: &HashMap<Uuid, LedgerState>,
+) -> Result<(), LedgerError> {
+    for (ledger_id, impact) in net_impacts {
+        // Safe to use expect here since we've already validated ledger existence
+        let state = states.get(ledger_id).ok_or(LedgerError::LedgerNotFound)?;
+
         let available = state.available_balance()?;
 
         if available
-            .checked_add(impact)
+            .checked_add(*impact)
             .ok_or(LedgerError::ArithmeticOverflow)?
             < 0
         {
             return Err(LedgerError::InsufficientFunds);
         }
     }
+    Ok(())
+}
 
-    // Once all checks pass, apply mutations and increment version
-    for posting in &entry.postings {
-        let state = states.get_mut(&posting.account_id).unwrap();
-        match posting.direction {
-            Direction::Debit => {
-                state.current_balance = state
-                    .current_balance
-                    .checked_sub(posting.amount)
-                    .ok_or(LedgerError::ArithmeticOverflow)?;
-            }
-            Direction::Credit => {
-                state.current_balance = state
-                    .current_balance
-                    .checked_add(posting.amount)
-                    .ok_or(LedgerError::ArithmeticOverflow)?;
-            }
-        }
+/// Applies all postings to update ledger balances.
+fn apply_postings(
+    postings: &[Posting],
+    states: &mut HashMap<Uuid, LedgerState>,
+) -> Result<(), LedgerError> {
+    for posting in postings {
+        let state = states
+            .get_mut(&posting.ledger_id)
+            .ok_or(LedgerError::LedgerNotFound)?;
+        state.apply_posting(posting)?;
     }
+    Ok(())
+}
 
-    // Postcondition 3: Optimistic Concurrency - only increment version once per account mutated
-    let mutated_accounts: std::collections::HashSet<Uuid> =
-        entry.postings.iter().map(|p| p.account_id).collect();
+/// Increments version for all mutated accounts (Optimistic Concurrency Control).
+fn increment_versions(
+    postings: &[Posting],
+    states: &mut HashMap<Uuid, LedgerState>,
+) -> Result<(), LedgerError> {
+    let mutated_accounts: HashSet<Uuid> = postings.iter().map(|p| p.ledger_id).collect();
+
     for account_id in mutated_accounts {
-        let state = states.get_mut(&account_id).unwrap();
-        state.version = state
-            .version
-            .checked_add(1)
-            .ok_or(LedgerError::ArithmeticOverflow)?;
+        let state = states
+            .get_mut(&account_id)
+            .ok_or(LedgerError::LedgerNotFound)?;
+        state.increment_version()?;
     }
+    Ok(())
+}
+
+/// Applies a journal entry to the ledger states, enforcing all invariants and constraints.
+///
+/// # Invariants Enforced
+/// - Invariant 1: All posting amounts must be positive
+/// - Invariant 2: Total debits must equal total credits (double-entry balance)
+///
+/// # Preconditions
+/// - All referenced ledgers must exist in the states map
+///
+/// # Postconditions
+/// - Limit enforcement: Available balance must remain non-negative after applying impacts
+/// - Optimistic concurrency: Version is incremented for each mutated account
+pub fn apply_journal_entry(
+    entry: &JournalEntry,
+    mut states: HashMap<Uuid, LedgerState>,
+) -> Result<HashMap<Uuid, LedgerState>, LedgerError> {
+    // Validate invariants
+    validate_positive_amounts(&entry.postings)?;
+    validate_double_entry_balance(&entry.postings)?;
+
+    // Validate preconditions
+    validate_ledgers_exist(&entry.postings, &states)?;
+
+    // Calculate and verify impacts before mutation
+    let net_impacts = calculate_net_impacts(&entry.postings)?;
+    verify_sufficient_funds(&net_impacts, &states)?;
+
+    // Apply mutations
+    apply_postings(&entry.postings, &mut states)?;
+    increment_versions(&entry.postings, &mut states)?;
 
     Ok(states)
 }
@@ -182,9 +252,9 @@ mod tests {
 
     #[test]
     fn test_apply_journal_entry_fails_with_zero_amount() {
-        let account_id = Uuid::new_v4();
+        let ledger_id = Uuid::new_v4();
         let posting = Posting {
-            account_id,
+            ledger_id,
             amount: 0,
             direction: Direction::Credit,
             remark: None,
@@ -197,7 +267,7 @@ mod tests {
         };
 
         let mut states = HashMap::new();
-        states.insert(account_id, valid_ledger_state(account_id));
+        states.insert(ledger_id, valid_ledger_state(ledger_id));
 
         let result = apply_journal_entry(&journal_entry, states);
 
@@ -206,9 +276,9 @@ mod tests {
 
     #[test]
     fn test_apply_journal_entry_fails_with_negative_amount() {
-        let account_id = Uuid::new_v4();
+        let ledger_id = Uuid::new_v4();
         let posting = Posting {
-            account_id,
+            ledger_id,
             amount: -100,
             direction: Direction::Credit,
             remark: None,
@@ -221,7 +291,7 @@ mod tests {
         };
 
         let mut states = HashMap::new();
-        states.insert(account_id, valid_ledger_state(account_id));
+        states.insert(ledger_id, valid_ledger_state(ledger_id));
 
         let result = apply_journal_entry(&journal_entry, states);
 
@@ -230,18 +300,18 @@ mod tests {
 
     #[test]
     fn test_apply_journal_entry_fails_with_imbalanced_entry() {
-        let account_id_1 = Uuid::new_v4();
-        let account_id_2 = Uuid::new_v4();
+        let ledger_id_1 = Uuid::new_v4();
+        let ledger_id_2 = Uuid::new_v4();
 
         let postings = vec![
             Posting {
-                account_id: account_id_1,
+                ledger_id: ledger_id_1,
                 amount: 100,
                 direction: Direction::Credit,
                 remark: None,
             },
             Posting {
-                account_id: account_id_2,
+                ledger_id: ledger_id_2,
                 amount: 50,
                 direction: Direction::Debit,
                 remark: None,
@@ -256,8 +326,8 @@ mod tests {
         };
 
         let mut states = HashMap::new();
-        states.insert(account_id_1, valid_ledger_state(account_id_1));
-        states.insert(account_id_2, valid_ledger_state(account_id_2));
+        states.insert(ledger_id_1, valid_ledger_state(ledger_id_1));
+        states.insert(ledger_id_2, valid_ledger_state(ledger_id_2));
 
         let result = apply_journal_entry(&journal_entry, states);
 
@@ -265,19 +335,19 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_journal_entry_fails_with_account_not_found() {
-        let account_id_1 = Uuid::new_v4();
-        let account_id_2 = Uuid::new_v4();
+    fn test_apply_journal_entry_fails_with_ledger_not_found() {
+        let ledger_id_1 = Uuid::new_v4();
+        let ledger_id_2 = Uuid::new_v4();
 
         let postings = vec![
             Posting {
-                account_id: account_id_1,
+                ledger_id: ledger_id_1,
                 amount: 100,
                 direction: Direction::Credit,
                 remark: None,
             },
             Posting {
-                account_id: account_id_2,
+                ledger_id: ledger_id_2,
                 amount: 100,
                 direction: Direction::Debit,
                 remark: None,
@@ -292,28 +362,28 @@ mod tests {
         };
 
         let mut states = HashMap::new();
-        states.insert(account_id_1, valid_ledger_state(account_id_1));
-        // Missing account_id_2
+        states.insert(ledger_id_1, valid_ledger_state(ledger_id_1));
+        // Missing ledger_id_2
 
         let result = apply_journal_entry(&journal_entry, states);
 
-        assert_eq!(result.unwrap_err(), LedgerError::AccountNotFound);
+        assert_eq!(result.unwrap_err(), LedgerError::LedgerNotFound);
     }
 
     #[test]
     fn test_apply_journal_entry_fails_with_insufficient_funds() {
-        let account_id_1 = Uuid::new_v4();
-        let account_id_2 = Uuid::new_v4();
+        let ledger_id_1 = Uuid::new_v4();
+        let ledger_id_2 = Uuid::new_v4();
 
         let postings = vec![
             Posting {
-                account_id: account_id_1,
+                ledger_id: ledger_id_1,
                 amount: 2000,
                 direction: Direction::Debit,
                 remark: None,
             },
             Posting {
-                account_id: account_id_2,
+                ledger_id: ledger_id_2,
                 amount: 2000,
                 direction: Direction::Credit,
                 remark: None,
@@ -328,8 +398,8 @@ mod tests {
         };
 
         let mut states = HashMap::new();
-        states.insert(account_id_1, valid_ledger_state(account_id_1));
-        states.insert(account_id_2, valid_ledger_state(account_id_2));
+        states.insert(ledger_id_1, valid_ledger_state(ledger_id_1));
+        states.insert(ledger_id_2, valid_ledger_state(ledger_id_2));
 
         let result = apply_journal_entry(&journal_entry, states);
 
@@ -338,18 +408,18 @@ mod tests {
 
     #[test]
     fn test_apply_journal_entry_success() {
-        let account_id_1 = Uuid::new_v4();
-        let account_id_2 = Uuid::new_v4();
+        let ledger_id_1 = Uuid::new_v4();
+        let ledger_id_2 = Uuid::new_v4();
 
         let postings = vec![
             Posting {
-                account_id: account_id_1,
+                ledger_id: ledger_id_1,
                 amount: 100,
                 direction: Direction::Debit,
                 remark: None,
             },
             Posting {
-                account_id: account_id_2,
+                ledger_id: ledger_id_2,
                 amount: 100,
                 direction: Direction::Credit,
                 remark: None,
@@ -364,8 +434,8 @@ mod tests {
         };
 
         let mut states = HashMap::new();
-        states.insert(account_id_1, valid_ledger_state(account_id_1));
-        states.insert(account_id_2, valid_ledger_state(account_id_2));
+        states.insert(ledger_id_1, valid_ledger_state(ledger_id_1));
+        states.insert(ledger_id_2, valid_ledger_state(ledger_id_2));
 
         let result = apply_journal_entry(&journal_entry, states.clone());
 
@@ -373,11 +443,11 @@ mod tests {
 
         let new_states = result.unwrap();
 
-        assert_eq!(new_states.get(&account_id_1).unwrap().current_balance, 900);
-        assert_eq!(new_states.get(&account_id_1).unwrap().version, 2);
+        assert_eq!(new_states.get(&ledger_id_1).unwrap().current_balance, 900);
+        assert_eq!(new_states.get(&ledger_id_1).unwrap().version, 2);
 
-        assert_eq!(new_states.get(&account_id_2).unwrap().current_balance, 1100);
-        assert_eq!(new_states.get(&account_id_2).unwrap().version, 2);
+        assert_eq!(new_states.get(&ledger_id_2).unwrap().current_balance, 1100);
+        assert_eq!(new_states.get(&ledger_id_2).unwrap().version, 2);
     }
 
     proptest! {
@@ -386,18 +456,18 @@ mod tests {
             initial_balance in 100..10_000i64,
             transfer_amount in 1..100i64
         ) {
-             let account_id_1 = Uuid::new_v4();
-             let account_id_2 = Uuid::new_v4();
+             let ledger_id_1 = Uuid::new_v4();
+             let ledger_id_2 = Uuid::new_v4();
 
              let postings = vec![
                 Posting {
-                    account_id: account_id_1,
+                    ledger_id: ledger_id_1,
                     amount: transfer_amount,
                     direction: Direction::Debit,
                     remark: None,
                 },
                 Posting {
-                    account_id: account_id_2,
+                    ledger_id: ledger_id_2,
                     amount: transfer_amount,
                     direction: Direction::Credit,
                     remark: None,
@@ -413,20 +483,20 @@ mod tests {
 
             let mut states = HashMap::new();
 
-            let mut state_1 = valid_ledger_state(account_id_1);
+            let mut state_1 = valid_ledger_state(ledger_id_1);
             state_1.current_balance = initial_balance;
-            states.insert(account_id_1, state_1);
+            states.insert(ledger_id_1, state_1);
 
-            let mut state_2 = valid_ledger_state(account_id_2);
+            let mut state_2 = valid_ledger_state(ledger_id_2);
             state_2.current_balance = initial_balance;
-            states.insert(account_id_2, state_2);
+            states.insert(ledger_id_2, state_2);
 
             let result = apply_journal_entry(&journal_entry, states.clone());
             prop_assert!(result.is_ok());
 
             let new_states = result.unwrap();
-            let new_state_1 = new_states.get(&account_id_1).unwrap();
-            let new_state_2 = new_states.get(&account_id_2).unwrap();
+            let new_state_1 = new_states.get(&ledger_id_1).unwrap();
+            let new_state_2 = new_states.get(&ledger_id_2).unwrap();
 
             // Property: Total funds should remain constant
             prop_assert_eq!(
@@ -438,10 +508,10 @@ mod tests {
 
     #[test]
     fn test_apply_journal_entry_respects_overdraft_and_holds() {
-        let account_id_1 = Uuid::new_v4(); // Sender
-        let account_id_2 = Uuid::new_v4(); // Receiver
+        let ledger_id_1 = Uuid::new_v4(); // Sender
+        let ledger_id_2 = Uuid::new_v4(); // Receiver
 
-        let mut state_1 = valid_ledger_state(account_id_1);
+        let mut state_1 = valid_ledger_state(ledger_id_1);
         // Current: 1000. Holds: 400. Limit: 500.
         // Available = 1000 - 400 + 500 = 1100.
         state_1.current_balance = 1000;
@@ -449,19 +519,19 @@ mod tests {
         state_1.overdraft_limit = 500;
 
         let mut states = HashMap::new();
-        states.insert(account_id_1, state_1);
-        states.insert(account_id_2, valid_ledger_state(account_id_2));
+        states.insert(ledger_id_1, state_1);
+        states.insert(ledger_id_2, valid_ledger_state(ledger_id_2));
 
         // Attempt to debit 1200 (Exceeds available of 1100) -> Should Fail
         let fail_postings = vec![
             Posting {
-                account_id: account_id_1,
+                ledger_id: ledger_id_1,
                 amount: 1200,
                 direction: Direction::Debit,
                 remark: None,
             },
             Posting {
-                account_id: account_id_2,
+                ledger_id: ledger_id_2,
                 amount: 1200,
                 direction: Direction::Credit,
                 remark: None,
@@ -480,13 +550,13 @@ mod tests {
         // Attempt to debit 1100 (Exactly drains available) -> Should Pass, leaving balance at -100
         let pass_postings = vec![
             Posting {
-                account_id: account_id_1,
+                ledger_id: ledger_id_1,
                 amount: 1100,
                 direction: Direction::Debit,
                 remark: None,
             },
             Posting {
-                account_id: account_id_2,
+                ledger_id: ledger_id_2,
                 amount: 1100,
                 direction: Direction::Credit,
                 remark: None,
@@ -504,7 +574,7 @@ mod tests {
         assert_eq!(
             pass_result
                 .unwrap()
-                .get(&account_id_1)
+                .get(&ledger_id_1)
                 .unwrap()
                 .current_balance,
             -100
@@ -513,32 +583,32 @@ mod tests {
 
     #[test]
     fn test_apply_journal_entry_evaluates_net_impact_atomically() {
-        let account_id_1 = Uuid::new_v4();
-        let account_id_2 = Uuid::new_v4();
+        let ledger_id_1 = Uuid::new_v4();
+        let ledger_id_2 = Uuid::new_v4();
 
-        let mut state_1 = valid_ledger_state(account_id_1);
+        let mut state_1 = valid_ledger_state(ledger_id_1);
         state_1.current_balance = 1000; // Available is 1000
 
         let mut states = HashMap::new();
-        states.insert(account_id_1, state_1);
-        states.insert(account_id_2, valid_ledger_state(account_id_2));
+        states.insert(ledger_id_1, state_1);
+        states.insert(ledger_id_2, valid_ledger_state(ledger_id_2));
 
         // Two debits of 600 against the same account. Total debit = 1200. Should fail.
         let postings = vec![
             Posting {
-                account_id: account_id_1,
+                ledger_id: ledger_id_1,
                 amount: 600,
                 direction: Direction::Debit,
                 remark: None,
             },
             Posting {
-                account_id: account_id_1,
+                ledger_id: ledger_id_1,
                 amount: 600,
                 direction: Direction::Debit,
                 remark: None,
             },
             Posting {
-                account_id: account_id_2,
+                ledger_id: ledger_id_2,
                 amount: 1200,
                 direction: Direction::Credit,
                 remark: None,
@@ -595,13 +665,13 @@ mod tests {
 
         let postings = vec![
             Posting {
-                account_id: account_id_1,
+                ledger_id: account_id_1,
                 amount: 100,
                 direction: Direction::Debit,
                 remark: None,
             },
             Posting {
-                account_id: account_id_2,
+                ledger_id: account_id_2,
                 amount: 100,
                 direction: Direction::Credit,
                 remark: None,
@@ -621,26 +691,26 @@ mod tests {
 
     #[test]
     fn test_apply_journal_entry_version_overflow() {
-        let account_id_1 = Uuid::new_v4();
-        let account_id_2 = Uuid::new_v4();
+        let ledger_id_1 = Uuid::new_v4();
+        let ledger_id_2 = Uuid::new_v4();
 
-        let mut state_1 = valid_ledger_state(account_id_1);
+        let mut state_1 = valid_ledger_state(ledger_id_1);
         // Set version to maximum possible i32 to trigger overflow on increment
         state_1.version = i32::MAX;
 
         let mut states = HashMap::new();
-        states.insert(account_id_1, state_1);
-        states.insert(account_id_2, valid_ledger_state(account_id_2));
+        states.insert(ledger_id_1, state_1);
+        states.insert(ledger_id_2, valid_ledger_state(ledger_id_2));
 
         let postings = vec![
             Posting {
-                account_id: account_id_1,
+                ledger_id: ledger_id_1,
                 amount: 100,
                 direction: Direction::Debit,
                 remark: None,
             },
             Posting {
-                account_id: account_id_2,
+                ledger_id: ledger_id_2,
                 amount: 100,
                 direction: Direction::Credit,
                 remark: None,
