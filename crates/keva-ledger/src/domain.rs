@@ -154,9 +154,7 @@ fn verify_sufficient_funds(
 ) -> Result<(), LedgerError> {
     for (ledger_id, impact) in net_impacts {
         // Safe to use expect here since we've already validated ledger existence
-        let state = states
-            .get(ledger_id)
-            .ok_or(LedgerError::LedgerNotFound)?;
+        let state = states.get(ledger_id).ok_or(LedgerError::LedgerNotFound)?;
 
         let available = state.available_balance()?;
 
