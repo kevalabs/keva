@@ -1,10 +1,13 @@
 # Specification: PRD-LEDG-001 - Core Math and Double-Entry Primitives
 
-**Traceability Link:** [Insert your Google Doc URL for PRD-LEDG-001 here]
+**Traceability Link:** https://docs.google.com/document/d/e/2PACX-1vRYdpSRcSqGRH4cfnsr_iVHEUL3ab6JXg-vtbsQFm5BgS3gdbwXpGOgJJwKQQZGqSyOLfEYC4cnB3Pa/pub
+
 **Target Module:** `keva-ledger`
+
 **File to Generate:** `crates/keva-ledger/src/domain.rs`
 
 ## 1. Execution Rules for the AI Agent
+
 When implementing this specification, the AI MUST adhere to the following constraints:
 
 1. **Strict Types:** Use `i64` for all monetary values. Floating-point types (`f32`, `f64`) are strictly forbidden. Use `uuid::Uuid` for identifiers.
