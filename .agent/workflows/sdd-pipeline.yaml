@@ -1,0 +1,59 @@
+name: AI-Assisted SDD Pipeline
+description: Executes a strict Red/Green Specification-Driven Development cycle. Forces the AI to write exhaustive proptests based on a Markdown contract before writing any implementation code.
+
+parameters:
+  - name: spec_path
+    description: Path to the .spec.md file (e.g., docs/specs/ledger/01-core-primitives.spec.md)
+    required: true
+    type: string
+  - name: target_file
+    description: Path to the Rust file to generate or mutate (e.g., crates/keva-ledger/src/domain.rs)
+    required: true
+    type: string
+
+steps:
+  - name: Step 1 - Ingest Contract
+    action: read_file
+    file: "${{ parameters.spec_path }}"
+    system_prompt: |
+      You are an elite Rust architect. You are executing a Specification-Driven Development (SDD) cycle.
+      Read the provided Markdown specification carefully. Absorb the Ubiquitous Language, Invariants, Preconditions, and Postconditions.
+      Do NOT write any code yet. Acknowledge that you have ingested the rules.
+
+  - name: Step 2 - Generate Red Phase (Test Suite)
+    action: generate_code
+    target: "${{ parameters.target_file }}"
+    system_prompt: |
+      Based strictly on the specification you just read, generate the Rust data structures and an exhaustive test suite using the `proptest` crate.
+      
+      RULES:
+      1. Define the structs and enums as requested.
+      2. Define the function signature (e.g., `apply_journal_entry`), but leave the body empty with `unimplemented!()`.
+      3. Write `#[test]` and `proptest!` blocks that actively attempt to violate every single Invariant, Precondition, and Postcondition listed in the spec.
+      4. DO NOT write the implementation logic to make these tests pass. 
+      
+      Output ONLY the test suite and the empty structural scaffolding.
+
+  - name: Step 3 - Human Verification Pause
+    action: wait_for_approval
+    message: |
+      "The Red Phase (Tests) is complete. Please run `cargo test` to verify that the tests fail correctly and accurately reflect your .spec.md invariants. 
+      Type 'approve' to proceed to implementation."
+
+  - name: Step 4 - Generate Green Phase (Implementation)
+    action: generate_code
+    target: "${{ parameters.target_file }}"
+    system_prompt: |
+      The test suite has been approved. Now, write the pure Rust implementation inside the `target_file` to make the failing tests pass.
+      
+      RULES:
+      1. You are forbidden from altering the test suite.
+      2. You are forbidden from violating the Hexagonal Architecture boundaries (e.g., no `sqlx`, no HTTP, no I/O).
+      3. Write the absolute minimum, mathematically pure code required to satisfy the Invariants.
+
+  - name: Step 5 - Final Verification
+    action: execute_command
+    command: "cargo test --manifest-path crates/keva-ledger/Cargo.toml"
+    system_prompt: |
+      Run the test suite. If it fails, autonomously fix the implementation until it passes, without changing the tests or the specification.
+      
