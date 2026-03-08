@@ -37,13 +37,18 @@ pub struct LedgerState {
     pub version: i32,
     pub previous_state_hash: String,
     pub current_state_hash: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 impl LedgerState {
     pub fn calculate_hash(&self) -> String {
         let payload = format!(
-            "{}{}{}",
-            self.previous_state_hash, self.current_balance, self.version
+            "{}{}{}{}",
+            self.previous_state_hash,
+            self.current_balance,
+            self.version,
+            self.updated_at.timestamp()
         );
         let mut hasher = Sha256::new();
         hasher.update(payload.as_bytes());
@@ -89,6 +94,7 @@ pub struct Posting {
     pub amount: i64,
     pub direction: Direction,
     pub remark: Option<String>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +102,9 @@ pub struct JournalEntry {
     pub id: Uuid,
     pub description: String,
     pub timestamp: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub correlation_id: Uuid,
+    pub metadata: Option<serde_json::Value>,
     pub postings: Vec<Posting>,
 }
 
@@ -216,6 +225,23 @@ fn increment_versions(
     Ok(())
 }
 
+/// Updates the updated_at timestamp for mutated accounts
+fn update_timestamps(
+    postings: &[Posting],
+    states: &mut HashMap<Uuid, LedgerState>,
+) -> Result<(), LedgerError> {
+    let now = Utc::now();
+    let mutated_accounts: HashSet<Uuid> = postings.iter().map(|p| p.ledger_id).collect();
+
+    for account_id in mutated_accounts {
+        let state = states
+            .get_mut(&account_id)
+            .ok_or(LedgerError::LedgerNotFound)?;
+        state.updated_at = now;
+    }
+    Ok(())
+}
+
 /// Verifies cryptographic hashes for all mutated accounts before processing.
 fn verify_cryptographic_hashes(
     postings: &[Posting],
@@ -280,6 +306,7 @@ pub fn apply_journal_entry(
     // Apply mutations
     apply_postings(&entry.postings, &mut states)?;
     increment_versions(&entry.postings, &mut states)?;
+    update_timestamps(&entry.postings, &mut states)?;
     update_hashes(&entry.postings, &mut states)?;
 
     Ok(states)
@@ -301,6 +328,8 @@ mod tests {
             version: 1,
             previous_state_hash: GENESIS_HASH.to_string(),
             current_state_hash: String::new(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
         };
         state.current_state_hash = state.calculate_hash();
         state
@@ -314,11 +343,15 @@ mod tests {
             amount: 0,
             direction: Direction::Credit,
             remark: None,
+            created_at: Utc::now(),
         };
         let journal_entry = JournalEntry {
             id: Uuid::new_v4(),
             description: "Test Entry".to_string(),
             timestamp: Utc::now(),
+            created_at: Utc::now(),
+            correlation_id: Uuid::new_v4(),
+            metadata: None,
             postings: vec![posting],
         };
 
@@ -338,11 +371,15 @@ mod tests {
             amount: -100,
             direction: Direction::Credit,
             remark: None,
+            created_at: Utc::now(),
         };
         let journal_entry = JournalEntry {
             id: Uuid::new_v4(),
             description: "Test Entry".to_string(),
             timestamp: Utc::now(),
+            created_at: Utc::now(),
+            correlation_id: Uuid::new_v4(),
+            metadata: None,
             postings: vec![posting],
         };
 
@@ -365,12 +402,14 @@ mod tests {
                 amount: 100,
                 direction: Direction::Credit,
                 remark: None,
+                created_at: Utc::now(),
             },
             Posting {
                 ledger_id: ledger_id_2,
                 amount: 50,
                 direction: Direction::Debit,
                 remark: None,
+                created_at: Utc::now(),
             },
         ];
 
@@ -378,6 +417,9 @@ mod tests {
             id: Uuid::new_v4(),
             description: "Test Entry".to_string(),
             timestamp: Utc::now(),
+            created_at: Utc::now(),
+            correlation_id: Uuid::new_v4(),
+            metadata: None,
             postings,
         };
 
@@ -401,12 +443,14 @@ mod tests {
                 amount: 100,
                 direction: Direction::Credit,
                 remark: None,
+                created_at: Utc::now(),
             },
             Posting {
                 ledger_id: ledger_id_2,
                 amount: 100,
                 direction: Direction::Debit,
                 remark: None,
+                created_at: Utc::now(),
             },
         ];
 
@@ -414,6 +458,9 @@ mod tests {
             id: Uuid::new_v4(),
             description: "Test Entry".to_string(),
             timestamp: Utc::now(),
+            created_at: Utc::now(),
+            correlation_id: Uuid::new_v4(),
+            metadata: None,
             postings,
         };
 
@@ -437,12 +484,14 @@ mod tests {
                 amount: 2000,
                 direction: Direction::Debit,
                 remark: None,
+                created_at: Utc::now(),
             },
             Posting {
                 ledger_id: ledger_id_2,
                 amount: 2000,
                 direction: Direction::Credit,
                 remark: None,
+                created_at: Utc::now(),
             },
         ];
 
@@ -450,6 +499,9 @@ mod tests {
             id: Uuid::new_v4(),
             description: "Test Entry".to_string(),
             timestamp: Utc::now(),
+            created_at: Utc::now(),
+            correlation_id: Uuid::new_v4(),
+            metadata: None,
             postings,
         };
 
@@ -473,12 +525,14 @@ mod tests {
                 amount: 100,
                 direction: Direction::Debit,
                 remark: None,
+                created_at: Utc::now(),
             },
             Posting {
                 ledger_id: ledger_id_2,
                 amount: 100,
                 direction: Direction::Credit,
                 remark: None,
+                created_at: Utc::now(),
             },
         ];
 
@@ -486,6 +540,9 @@ mod tests {
             id: Uuid::new_v4(),
             description: "Test Entry".to_string(),
             timestamp: Utc::now(),
+            created_at: Utc::now(),
+            correlation_id: Uuid::new_v4(),
+            metadata: None,
             postings,
         };
 
@@ -532,20 +589,25 @@ mod tests {
                     ledger_id: ledger_id_1,
                     amount: transfer_amount,
                     direction: Direction::Debit,
-                    remark: None,
-                },
+                remark: None,
+                created_at: Utc::now(),
+            },
                 Posting {
                     ledger_id: ledger_id_2,
                     amount: transfer_amount,
                     direction: Direction::Credit,
-                    remark: None,
-                },
+                remark: None,
+                created_at: Utc::now(),
+            },
             ];
 
             let journal_entry = JournalEntry {
                 id: Uuid::new_v4(),
                 description: "Proptest Entry".to_string(),
                 timestamp: Utc::now(),
+            created_at: Utc::now(),
+            correlation_id: Uuid::new_v4(),
+            metadata: None,
                 postings,
             };
 
@@ -599,18 +661,23 @@ mod tests {
                 amount: 1200,
                 direction: Direction::Debit,
                 remark: None,
+                created_at: Utc::now(),
             },
             Posting {
                 ledger_id: ledger_id_2,
                 amount: 1200,
                 direction: Direction::Credit,
                 remark: None,
+                created_at: Utc::now(),
             },
         ];
         let fail_entry = JournalEntry {
             id: Uuid::new_v4(),
             description: "Fail".to_string(),
             timestamp: Utc::now(),
+            created_at: Utc::now(),
+            correlation_id: Uuid::new_v4(),
+            metadata: None,
             postings: fail_postings,
         };
 
@@ -624,18 +691,23 @@ mod tests {
                 amount: 1100,
                 direction: Direction::Debit,
                 remark: None,
+                created_at: Utc::now(),
             },
             Posting {
                 ledger_id: ledger_id_2,
                 amount: 1100,
                 direction: Direction::Credit,
                 remark: None,
+                created_at: Utc::now(),
             },
         ];
         let pass_entry = JournalEntry {
             id: Uuid::new_v4(),
             description: "Pass".to_string(),
             timestamp: Utc::now(),
+            created_at: Utc::now(),
+            correlation_id: Uuid::new_v4(),
+            metadata: None,
             postings: pass_postings,
         };
 
@@ -670,18 +742,21 @@ mod tests {
                 amount: 600,
                 direction: Direction::Debit,
                 remark: None,
+                created_at: Utc::now(),
             },
             Posting {
                 ledger_id: ledger_id_1,
                 amount: 600,
                 direction: Direction::Debit,
                 remark: None,
+                created_at: Utc::now(),
             },
             Posting {
                 ledger_id: ledger_id_2,
                 amount: 1200,
                 direction: Direction::Credit,
                 remark: None,
+                created_at: Utc::now(),
             },
         ];
 
@@ -689,6 +764,9 @@ mod tests {
             id: Uuid::new_v4(),
             description: "Net Impact Test".to_string(),
             timestamp: Utc::now(),
+            created_at: Utc::now(),
+            correlation_id: Uuid::new_v4(),
+            metadata: None,
             postings,
         };
 
@@ -706,6 +784,8 @@ mod tests {
             version: 1,
             previous_state_hash: String::new(),
             current_state_hash: String::new(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
         };
         // 1000 - 400 + 500 = 1100
         assert_eq!(state.available_balance().unwrap(), 1100);
@@ -718,6 +798,8 @@ mod tests {
             version: 1,
             previous_state_hash: String::new(),
             current_state_hash: String::new(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
         };
         // -200 - 100 + 500 = 200
         assert_eq!(state_negative.available_balance().unwrap(), 200);
@@ -744,12 +826,14 @@ mod tests {
                 amount: 100,
                 direction: Direction::Debit,
                 remark: None,
+                created_at: Utc::now(),
             },
             Posting {
                 ledger_id: account_id_2,
                 amount: 100,
                 direction: Direction::Credit,
                 remark: None,
+                created_at: Utc::now(),
             },
         ];
 
@@ -757,6 +841,9 @@ mod tests {
             id: Uuid::new_v4(),
             description: "Overflow Test".to_string(),
             timestamp: Utc::now(),
+            created_at: Utc::now(),
+            correlation_id: Uuid::new_v4(),
+            metadata: None,
             postings,
         };
 
@@ -784,12 +871,14 @@ mod tests {
                 amount: 100,
                 direction: Direction::Debit,
                 remark: None,
+                created_at: Utc::now(),
             },
             Posting {
                 ledger_id: ledger_id_2,
                 amount: 100,
                 direction: Direction::Credit,
                 remark: None,
+                created_at: Utc::now(),
             },
         ];
 
@@ -797,6 +886,9 @@ mod tests {
             id: Uuid::new_v4(),
             description: "Version Overflow Test".to_string(),
             timestamp: Utc::now(),
+            created_at: Utc::now(),
+            correlation_id: Uuid::new_v4(),
+            metadata: None,
             postings,
         };
 
@@ -823,12 +915,14 @@ mod tests {
                 amount: 100,
                 direction: Direction::Debit,
                 remark: None,
+                created_at: Utc::now(),
             },
             Posting {
                 ledger_id: ledger_id_2,
                 amount: 100,
                 direction: Direction::Credit,
                 remark: None,
+                created_at: Utc::now(),
             },
         ];
 
@@ -836,6 +930,9 @@ mod tests {
             id: Uuid::new_v4(),
             description: "Tamper Test".to_string(),
             timestamp: Utc::now(),
+            created_at: Utc::now(),
+            correlation_id: Uuid::new_v4(),
+            metadata: None,
             postings,
         };
 
@@ -852,6 +949,7 @@ mod tests {
             amount: 1, // i64::MIN - 1 -> Overflow
             direction: Direction::Debit,
             remark: None,
+            created_at: Utc::now(),
         };
         assert_eq!(
             state.apply_posting(&posting),
@@ -868,6 +966,7 @@ mod tests {
             amount: 1, // i64::MAX + 1 -> Overflow
             direction: Direction::Credit,
             remark: None,
+            created_at: Utc::now(),
         };
         assert_eq!(
             state.apply_posting(&posting),
@@ -883,12 +982,14 @@ mod tests {
                 amount: i64::MAX,
                 direction: Direction::Debit,
                 remark: None,
+                created_at: Utc::now(),
             },
             Posting {
                 ledger_id: Uuid::new_v4(),
                 amount: 1,
                 direction: Direction::Debit,
                 remark: None,
+                created_at: Utc::now(),
             },
         ];
         assert_eq!(
@@ -905,12 +1006,14 @@ mod tests {
                 amount: i64::MAX,
                 direction: Direction::Credit,
                 remark: None,
+                created_at: Utc::now(),
             },
             Posting {
                 ledger_id: Uuid::new_v4(),
                 amount: 1,
                 direction: Direction::Credit,
                 remark: None,
+                created_at: Utc::now(),
             },
         ];
         assert_eq!(
@@ -928,12 +1031,14 @@ mod tests {
                 amount: i64::MAX,
                 direction: Direction::Debit,
                 remark: None,
+                created_at: Utc::now(),
             },
             Posting {
                 ledger_id,
                 amount: 2,
                 direction: Direction::Debit,
                 remark: None,
+                created_at: Utc::now(),
             },
         ];
         assert_eq!(
@@ -951,12 +1056,14 @@ mod tests {
                 amount: i64::MAX,
                 direction: Direction::Credit,
                 remark: None,
+                created_at: Utc::now(),
             },
             Posting {
                 ledger_id,
                 amount: 1,
                 direction: Direction::Credit,
                 remark: None,
+                created_at: Utc::now(),
             },
         ];
         assert_eq!(
@@ -990,6 +1097,7 @@ mod tests {
             amount: 100,
             direction: Direction::Debit,
             remark: None,
+            created_at: Utc::now(),
         }];
         let mut states = HashMap::new();
         assert_eq!(
@@ -1012,6 +1120,7 @@ mod tests {
             amount: 1, // i64::MAX + 1 -> Overflow
             direction: Direction::Credit,
             remark: None,
+            created_at: Utc::now(),
         }];
         assert_eq!(
             apply_postings(&postings, &mut states),
@@ -1026,6 +1135,7 @@ mod tests {
             amount: 100,
             direction: Direction::Debit,
             remark: None,
+            created_at: Utc::now(),
         }];
         let mut states = HashMap::new();
         assert_eq!(
@@ -1041,6 +1151,7 @@ mod tests {
             amount: 100,
             direction: Direction::Debit,
             remark: None,
+            created_at: Utc::now(),
         }];
         let mut states = HashMap::new();
         assert_eq!(
@@ -1056,6 +1167,7 @@ mod tests {
             amount: 100,
             direction: Direction::Debit,
             remark: None,
+            created_at: Utc::now(),
         }];
         let states = HashMap::new();
         assert_eq!(
