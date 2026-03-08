@@ -884,6 +884,7 @@ dependencies = [
  "chrono",
  "proptest",
  "quickcheck",
+ "serde_json",
  "sha2",
  "sqlx",
  "thiserror",
