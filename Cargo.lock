@@ -884,6 +884,7 @@ dependencies = [
  "chrono",
  "proptest",
  "quickcheck",
+ "sha2",
  "sqlx",
  "thiserror",
  "tracing",

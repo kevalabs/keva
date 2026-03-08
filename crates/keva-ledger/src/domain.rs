@@ -1,7 +1,10 @@
 use chrono::{DateTime, Utc};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 use uuid::Uuid;
+
+pub const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Direction {
@@ -21,6 +24,8 @@ pub enum LedgerError {
     ZeroAmountPosting,
     #[error("Arithmetic overflow")]
     ArithmeticOverflow,
+    #[error("Cryptographic mismatch")]
+    CryptographicMismatch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,9 +35,21 @@ pub struct LedgerState {
     pub pending_holds: i64,
     pub overdraft_limit: i64,
     pub version: i32,
+    pub previous_state_hash: String,
+    pub current_state_hash: String,
 }
 
 impl LedgerState {
+    pub fn calculate_hash(&self) -> String {
+        let payload = format!(
+            "{}{}{}",
+            self.previous_state_hash, self.current_balance, self.version
+        );
+        let mut hasher = Sha256::new();
+        hasher.update(payload.as_bytes());
+        format!("{:x}", hasher.finalize())
+    }
+
     pub fn available_balance(&self) -> Result<i64, LedgerError> {
         self.current_balance
             .checked_sub(self.pending_holds)
@@ -199,6 +216,39 @@ fn increment_versions(
     Ok(())
 }
 
+/// Verifies cryptographic hashes for all mutated accounts before processing.
+fn verify_cryptographic_hashes(
+    postings: &[Posting],
+    states: &HashMap<Uuid, LedgerState>,
+) -> Result<(), LedgerError> {
+    let mutated_accounts: HashSet<Uuid> = postings.iter().map(|p| p.ledger_id).collect();
+
+    for account_id in mutated_accounts {
+        let state = states.get(&account_id).ok_or(LedgerError::LedgerNotFound)?;
+        if state.calculate_hash() != state.current_state_hash {
+            return Err(LedgerError::CryptographicMismatch);
+        }
+    }
+    Ok(())
+}
+
+/// Updates cryptographic hashes for mutated accounts (Hash Chaining).
+fn update_hashes(
+    postings: &[Posting],
+    states: &mut HashMap<Uuid, LedgerState>,
+) -> Result<(), LedgerError> {
+    let mutated_accounts: HashSet<Uuid> = postings.iter().map(|p| p.ledger_id).collect();
+
+    for account_id in mutated_accounts {
+        let state = states
+            .get_mut(&account_id)
+            .ok_or(LedgerError::LedgerNotFound)?;
+        state.previous_state_hash = state.current_state_hash.clone();
+        state.current_state_hash = state.calculate_hash();
+    }
+    Ok(())
+}
+
 /// Applies a journal entry to the ledger states, enforcing all invariants and constraints.
 ///
 /// # Invariants Enforced
@@ -221,6 +271,7 @@ pub fn apply_journal_entry(
 
     // Validate preconditions
     validate_ledgers_exist(&entry.postings, &states)?;
+    verify_cryptographic_hashes(&entry.postings, &states)?;
 
     // Calculate and verify impacts before mutation
     let net_impacts = calculate_net_impacts(&entry.postings)?;
@@ -229,6 +280,7 @@ pub fn apply_journal_entry(
     // Apply mutations
     apply_postings(&entry.postings, &mut states)?;
     increment_versions(&entry.postings, &mut states)?;
+    update_hashes(&entry.postings, &mut states)?;
 
     Ok(states)
 }
@@ -241,13 +293,17 @@ mod tests {
 
     // Helper functions for testing
     fn valid_ledger_state(id: Uuid) -> LedgerState {
-        LedgerState {
+        let mut state = LedgerState {
             id,
             current_balance: 1000,
             pending_holds: 0,
             overdraft_limit: 0,
             version: 1,
-        }
+            previous_state_hash: GENESIS_HASH.to_string(),
+            current_state_hash: String::new(),
+        };
+        state.current_state_hash = state.calculate_hash();
+        state
     }
 
     #[test]
@@ -443,11 +499,23 @@ mod tests {
 
         let new_states = result.unwrap();
 
-        assert_eq!(new_states.get(&ledger_id_1).unwrap().current_balance, 900);
-        assert_eq!(new_states.get(&ledger_id_1).unwrap().version, 2);
+        let new_state_1 = new_states.get(&ledger_id_1).unwrap();
+        assert_eq!(new_state_1.current_balance, 900);
+        assert_eq!(new_state_1.version, 2);
+        assert_eq!(
+            new_state_1.previous_state_hash,
+            states.get(&ledger_id_1).unwrap().current_state_hash
+        );
+        assert_eq!(new_state_1.current_state_hash, new_state_1.calculate_hash());
 
-        assert_eq!(new_states.get(&ledger_id_2).unwrap().current_balance, 1100);
-        assert_eq!(new_states.get(&ledger_id_2).unwrap().version, 2);
+        let new_state_2 = new_states.get(&ledger_id_2).unwrap();
+        assert_eq!(new_state_2.current_balance, 1100);
+        assert_eq!(new_state_2.version, 2);
+        assert_eq!(
+            new_state_2.previous_state_hash,
+            states.get(&ledger_id_2).unwrap().current_state_hash
+        );
+        assert_eq!(new_state_2.current_state_hash, new_state_2.calculate_hash());
     }
 
     proptest! {
@@ -485,10 +553,12 @@ mod tests {
 
             let mut state_1 = valid_ledger_state(ledger_id_1);
             state_1.current_balance = initial_balance;
+            state_1.current_state_hash = state_1.calculate_hash();
             states.insert(ledger_id_1, state_1);
 
             let mut state_2 = valid_ledger_state(ledger_id_2);
             state_2.current_balance = initial_balance;
+            state_2.current_state_hash = state_2.calculate_hash();
             states.insert(ledger_id_2, state_2);
 
             let result = apply_journal_entry(&journal_entry, states.clone());
@@ -634,6 +704,8 @@ mod tests {
             pending_holds: 400,
             overdraft_limit: 500,
             version: 1,
+            previous_state_hash: String::new(),
+            current_state_hash: String::new(),
         };
         // 1000 - 400 + 500 = 1100
         assert_eq!(state.available_balance().unwrap(), 1100);
@@ -644,6 +716,8 @@ mod tests {
             pending_holds: 100,
             overdraft_limit: 500,
             version: 1,
+            previous_state_hash: String::new(),
+            current_state_hash: String::new(),
         };
         // -200 - 100 + 500 = 200
         assert_eq!(state_negative.available_balance().unwrap(), 200);
@@ -658,6 +732,7 @@ mod tests {
         let mut state_1 = valid_ledger_state(account_id_1);
         state_1.current_balance = i64::MAX;
         state_1.overdraft_limit = 100; // i64::MAX + 100 -> Overflow
+        state_1.current_state_hash = state_1.calculate_hash();
 
         let mut states = HashMap::new();
         states.insert(account_id_1, state_1);
@@ -697,6 +772,7 @@ mod tests {
         let mut state_1 = valid_ledger_state(ledger_id_1);
         // Set version to maximum possible i32 to trigger overflow on increment
         state_1.version = i32::MAX;
+        state_1.current_state_hash = state_1.calculate_hash();
 
         let mut states = HashMap::new();
         states.insert(ledger_id_1, state_1);
@@ -726,5 +802,265 @@ mod tests {
 
         let result = apply_journal_entry(&journal_entry, states);
         assert_eq!(result.unwrap_err(), LedgerError::ArithmeticOverflow);
+    }
+
+    #[test]
+    fn test_apply_journal_entry_fails_with_cryptographic_mismatch() {
+        let ledger_id_1 = Uuid::new_v4();
+        let ledger_id_2 = Uuid::new_v4();
+
+        let mut state_1 = valid_ledger_state(ledger_id_1);
+        // Tamper with the balance without updating the hash
+        state_1.current_balance = 2000;
+
+        let mut states = HashMap::new();
+        states.insert(ledger_id_1, state_1);
+        states.insert(ledger_id_2, valid_ledger_state(ledger_id_2));
+
+        let postings = vec![
+            Posting {
+                ledger_id: ledger_id_1,
+                amount: 100,
+                direction: Direction::Debit,
+                remark: None,
+            },
+            Posting {
+                ledger_id: ledger_id_2,
+                amount: 100,
+                direction: Direction::Credit,
+                remark: None,
+            },
+        ];
+
+        let journal_entry = JournalEntry {
+            id: Uuid::new_v4(),
+            description: "Tamper Test".to_string(),
+            timestamp: Utc::now(),
+            postings,
+        };
+
+        let result = apply_journal_entry(&journal_entry, states);
+        assert_eq!(result.unwrap_err(), LedgerError::CryptographicMismatch);
+    }
+
+    #[test]
+    fn test_apply_posting_debit_overflow() {
+        let mut state = valid_ledger_state(Uuid::new_v4());
+        state.current_balance = i64::MIN;
+        let posting = Posting {
+            ledger_id: state.id,
+            amount: 1, // i64::MIN - 1 -> Overflow
+            direction: Direction::Debit,
+            remark: None,
+        };
+        assert_eq!(
+            state.apply_posting(&posting),
+            Err(LedgerError::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn test_apply_posting_credit_overflow() {
+        let mut state = valid_ledger_state(Uuid::new_v4());
+        state.current_balance = i64::MAX;
+        let posting = Posting {
+            ledger_id: state.id,
+            amount: 1, // i64::MAX + 1 -> Overflow
+            direction: Direction::Credit,
+            remark: None,
+        };
+        assert_eq!(
+            state.apply_posting(&posting),
+            Err(LedgerError::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn test_validate_double_entry_balance_debit_overflow() {
+        let postings = vec![
+            Posting {
+                ledger_id: Uuid::new_v4(),
+                amount: i64::MAX,
+                direction: Direction::Debit,
+                remark: None,
+            },
+            Posting {
+                ledger_id: Uuid::new_v4(),
+                amount: 1,
+                direction: Direction::Debit,
+                remark: None,
+            },
+        ];
+        assert_eq!(
+            validate_double_entry_balance(&postings),
+            Err(LedgerError::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn test_validate_double_entry_balance_credit_overflow() {
+        let postings = vec![
+            Posting {
+                ledger_id: Uuid::new_v4(),
+                amount: i64::MAX,
+                direction: Direction::Credit,
+                remark: None,
+            },
+            Posting {
+                ledger_id: Uuid::new_v4(),
+                amount: 1,
+                direction: Direction::Credit,
+                remark: None,
+            },
+        ];
+        assert_eq!(
+            validate_double_entry_balance(&postings),
+            Err(LedgerError::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn test_calculate_net_impacts_debit_overflow() {
+        let ledger_id = Uuid::new_v4();
+        let postings = vec![
+            Posting {
+                ledger_id,
+                amount: i64::MAX,
+                direction: Direction::Debit,
+                remark: None,
+            },
+            Posting {
+                ledger_id,
+                amount: 2,
+                direction: Direction::Debit,
+                remark: None,
+            },
+        ];
+        assert_eq!(
+            calculate_net_impacts(&postings),
+            Err(LedgerError::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn test_calculate_net_impacts_credit_overflow() {
+        let ledger_id = Uuid::new_v4();
+        let postings = vec![
+            Posting {
+                ledger_id,
+                amount: i64::MAX,
+                direction: Direction::Credit,
+                remark: None,
+            },
+            Posting {
+                ledger_id,
+                amount: 1,
+                direction: Direction::Credit,
+                remark: None,
+            },
+        ];
+        assert_eq!(
+            calculate_net_impacts(&postings),
+            Err(LedgerError::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn test_verify_sufficient_funds_overflow() {
+        let ledger_id = Uuid::new_v4();
+        let mut state = valid_ledger_state(ledger_id);
+        state.current_balance = i64::MAX;
+
+        let mut states = HashMap::new();
+        states.insert(ledger_id, state);
+
+        let mut net_impacts = HashMap::new();
+        net_impacts.insert(ledger_id, 1);
+
+        assert_eq!(
+            verify_sufficient_funds(&net_impacts, &states),
+            Err(LedgerError::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn test_apply_postings_ledger_not_found() {
+        let postings = vec![Posting {
+            ledger_id: Uuid::new_v4(),
+            amount: 100,
+            direction: Direction::Debit,
+            remark: None,
+        }];
+        let mut states = HashMap::new();
+        assert_eq!(
+            apply_postings(&postings, &mut states),
+            Err(LedgerError::LedgerNotFound)
+        );
+    }
+
+    #[test]
+    fn test_apply_postings_arithmetic_overflow() {
+        let ledger_id = Uuid::new_v4();
+        let mut state = valid_ledger_state(ledger_id);
+        state.current_balance = i64::MAX;
+
+        let mut states = HashMap::new();
+        states.insert(ledger_id, state);
+
+        let postings = vec![Posting {
+            ledger_id,
+            amount: 1, // i64::MAX + 1 -> Overflow
+            direction: Direction::Credit,
+            remark: None,
+        }];
+        assert_eq!(
+            apply_postings(&postings, &mut states),
+            Err(LedgerError::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn test_increment_versions_ledger_not_found() {
+        let postings = vec![Posting {
+            ledger_id: Uuid::new_v4(),
+            amount: 100,
+            direction: Direction::Debit,
+            remark: None,
+        }];
+        let mut states = HashMap::new();
+        assert_eq!(
+            increment_versions(&postings, &mut states),
+            Err(LedgerError::LedgerNotFound)
+        );
+    }
+
+    #[test]
+    fn test_update_hashes_ledger_not_found() {
+        let postings = vec![Posting {
+            ledger_id: Uuid::new_v4(),
+            amount: 100,
+            direction: Direction::Debit,
+            remark: None,
+        }];
+        let mut states = HashMap::new();
+        assert_eq!(
+            update_hashes(&postings, &mut states),
+            Err(LedgerError::LedgerNotFound)
+        );
+    }
+
+    #[test]
+    fn test_verify_cryptographic_hashes_ledger_not_found() {
+        let postings = vec![Posting {
+            ledger_id: Uuid::new_v4(),
+            amount: 100,
+            direction: Direction::Debit,
+            remark: None,
+        }];
+        let states = HashMap::new();
+        assert_eq!(
+            verify_cryptographic_hashes(&postings, &states),
+            Err(LedgerError::LedgerNotFound)
+        );
     }
 }

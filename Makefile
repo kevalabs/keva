@@ -1,4 +1,4 @@
-.PHONY: all setup check lint test coverage
+.PHONY: all setup check lint test coverage fmt
 
 # The default command when a developer just types `make`
 all: lint test
@@ -21,3 +21,7 @@ test:
 coverage:
 	cargo llvm-cov --workspace --html
 	@echo "Coverage report generated at target/llvm-cov/html/index.html"
+
+# Formats the codebase
+fmt:
+	cargo fmt --all

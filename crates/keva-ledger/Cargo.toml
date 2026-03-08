@@ -11,6 +11,7 @@ tracing.workspace = true
 chrono.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 quickcheck = "1.1.0"
+sha2 = { workspace = true }
 
 [dev-dependencies]
 proptest = "1.10.0"
