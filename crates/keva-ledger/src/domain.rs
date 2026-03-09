@@ -37,6 +37,7 @@ pub struct LedgerState {
     pub version: i32,
     pub previous_state_hash: String,
     pub current_state_hash: String,
+    pub recent_entry_hash: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -44,11 +45,12 @@ pub struct LedgerState {
 impl LedgerState {
     pub fn calculate_hash(&self) -> String {
         let payload = format!(
-            "{}{}{}{}",
+            "{}{}{}{}{}",
             self.previous_state_hash,
             self.current_balance,
             self.version,
-            self.updated_at.timestamp()
+            self.updated_at.timestamp(),
+            self.recent_entry_hash
         );
         let mut hasher = Sha256::new();
         hasher.update(payload.as_bytes());
@@ -106,6 +108,52 @@ pub struct JournalEntry {
     pub correlation_id: Uuid,
     pub metadata: Option<serde_json::Value>,
     pub postings: Vec<Posting>,
+    pub entry_hash: String,
+}
+
+impl JournalEntry {
+    pub fn new(
+        id: Uuid,
+        description: String,
+        correlation_id: Uuid,
+        metadata: Option<serde_json::Value>,
+        mut postings: Vec<Posting>,
+    ) -> Self {
+        let timestamp = Utc::now();
+        let created_at = timestamp;
+
+        postings.sort_by_key(|p| p.ledger_id);
+        let mut postings_data = String::new();
+        for p in &postings {
+            let dir = match p.direction {
+                Direction::Debit => "Debit",
+                Direction::Credit => "Credit",
+            };
+            postings_data.push_str(&format!("{}{}{}", p.ledger_id, p.amount, dir));
+        }
+
+        let payload = format!(
+            "{}{}{}{}",
+            id,
+            correlation_id,
+            created_at.timestamp(),
+            postings_data
+        );
+        let mut hasher = Sha256::new();
+        hasher.update(payload.as_bytes());
+        let entry_hash = format!("{:x}", hasher.finalize());
+
+        Self {
+            id,
+            description,
+            timestamp,
+            created_at,
+            correlation_id,
+            metadata,
+            postings,
+            entry_hash,
+        }
+    }
 }
 
 /// Validates that all posting amounts are positive (Invariant 1).
@@ -262,6 +310,7 @@ fn verify_cryptographic_hashes(
 fn update_hashes(
     postings: &[Posting],
     states: &mut HashMap<Uuid, LedgerState>,
+    entry_hash: &str,
 ) -> Result<(), LedgerError> {
     let mutated_accounts: HashSet<Uuid> = postings.iter().map(|p| p.ledger_id).collect();
 
@@ -270,6 +319,7 @@ fn update_hashes(
             .get_mut(&account_id)
             .ok_or(LedgerError::LedgerNotFound)?;
         state.previous_state_hash = state.current_state_hash.clone();
+        state.recent_entry_hash = entry_hash.to_string();
         state.current_state_hash = state.calculate_hash();
     }
     Ok(())
@@ -307,7 +357,7 @@ pub fn apply_journal_entry(
     apply_postings(&entry.postings, &mut states)?;
     increment_versions(&entry.postings, &mut states)?;
     update_timestamps(&entry.postings, &mut states)?;
-    update_hashes(&entry.postings, &mut states)?;
+    update_hashes(&entry.postings, &mut states, &entry.entry_hash)?;
 
     Ok(states)
 }
@@ -328,6 +378,7 @@ mod tests {
             version: 1,
             previous_state_hash: GENESIS_HASH.to_string(),
             current_state_hash: String::new(),
+            recent_entry_hash: String::new(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -353,6 +404,7 @@ mod tests {
             correlation_id: Uuid::new_v4(),
             metadata: None,
             postings: vec![posting],
+            entry_hash: String::new(),
         };
 
         let mut states = HashMap::new();
@@ -381,6 +433,7 @@ mod tests {
             correlation_id: Uuid::new_v4(),
             metadata: None,
             postings: vec![posting],
+            entry_hash: String::new(),
         };
 
         let mut states = HashMap::new();
@@ -421,6 +474,7 @@ mod tests {
             correlation_id: Uuid::new_v4(),
             metadata: None,
             postings,
+            entry_hash: String::new(),
         };
 
         let mut states = HashMap::new();
@@ -462,6 +516,7 @@ mod tests {
             correlation_id: Uuid::new_v4(),
             metadata: None,
             postings,
+            entry_hash: String::new(),
         };
 
         let mut states = HashMap::new();
@@ -503,6 +558,7 @@ mod tests {
             correlation_id: Uuid::new_v4(),
             metadata: None,
             postings,
+            entry_hash: String::new(),
         };
 
         let mut states = HashMap::new();
@@ -544,6 +600,7 @@ mod tests {
             correlation_id: Uuid::new_v4(),
             metadata: None,
             postings,
+            entry_hash: String::new(),
         };
 
         let mut states = HashMap::new();
@@ -609,6 +666,7 @@ mod tests {
             correlation_id: Uuid::new_v4(),
             metadata: None,
                 postings,
+                entry_hash: String::new(),
             };
 
             let mut states = HashMap::new();
@@ -679,6 +737,7 @@ mod tests {
             correlation_id: Uuid::new_v4(),
             metadata: None,
             postings: fail_postings,
+            entry_hash: String::new(),
         };
 
         let fail_result = apply_journal_entry(&fail_entry, states.clone());
@@ -709,6 +768,7 @@ mod tests {
             correlation_id: Uuid::new_v4(),
             metadata: None,
             postings: pass_postings,
+            entry_hash: String::new(),
         };
 
         let pass_result = apply_journal_entry(&pass_entry, states);
@@ -768,6 +828,7 @@ mod tests {
             correlation_id: Uuid::new_v4(),
             metadata: None,
             postings,
+            entry_hash: String::new(),
         };
 
         let result = apply_journal_entry(&journal_entry, states);
@@ -784,6 +845,7 @@ mod tests {
             version: 1,
             previous_state_hash: String::new(),
             current_state_hash: String::new(),
+            recent_entry_hash: String::new(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -798,6 +860,7 @@ mod tests {
             version: 1,
             previous_state_hash: String::new(),
             current_state_hash: String::new(),
+            recent_entry_hash: String::new(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -845,6 +908,7 @@ mod tests {
             correlation_id: Uuid::new_v4(),
             metadata: None,
             postings,
+            entry_hash: String::new(),
         };
 
         let result = apply_journal_entry(&journal_entry, states);
@@ -890,6 +954,7 @@ mod tests {
             correlation_id: Uuid::new_v4(),
             metadata: None,
             postings,
+            entry_hash: String::new(),
         };
 
         let result = apply_journal_entry(&journal_entry, states);
@@ -934,6 +999,7 @@ mod tests {
             correlation_id: Uuid::new_v4(),
             metadata: None,
             postings,
+            entry_hash: String::new(),
         };
 
         let result = apply_journal_entry(&journal_entry, states);
@@ -1155,7 +1221,7 @@ mod tests {
         }];
         let mut states = HashMap::new();
         assert_eq!(
-            update_hashes(&postings, &mut states),
+            update_hashes(&postings, &mut states, &String::new()),
             Err(LedgerError::LedgerNotFound)
         );
     }
@@ -1174,5 +1240,52 @@ mod tests {
             verify_cryptographic_hashes(&postings, &states),
             Err(LedgerError::LedgerNotFound)
         );
+    }
+
+    #[test]
+    fn test_journal_entry_new_calculates_hash() {
+        let entry_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let ledger_id_1 = Uuid::new_v4();
+        let ledger_id_2 = Uuid::new_v4();
+
+        let postings = vec![
+            Posting {
+                ledger_id: ledger_id_2,
+                amount: 100,
+                direction: Direction::Credit,
+                remark: None,
+                created_at: Utc::now(),
+            },
+            Posting {
+                ledger_id: ledger_id_1,
+                amount: 100,
+                direction: Direction::Debit,
+                remark: None,
+                created_at: Utc::now(),
+            },
+        ];
+
+        let entry = JournalEntry::new(
+            entry_id,
+            "New Entry Test".to_string(),
+            correlation_id,
+            None,
+            postings,
+        );
+
+        // Verify postings are sorted by ledger_id
+        let is_sorted = entry
+            .postings
+            .windows(2)
+            .all(|w| w[0].ledger_id <= w[1].ledger_id);
+        assert!(is_sorted);
+
+        // Verify entry hash is set and has correct length (64 hex chars for SHA-256)
+        assert_eq!(entry.entry_hash.len(), 64);
+        assert_eq!(entry.id, entry_id);
+        assert_eq!(entry.correlation_id, correlation_id);
+        assert_eq!(entry.description, "New Entry Test");
+        assert!(entry.metadata.is_none());
     }
 }
