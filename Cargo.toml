@@ -23,7 +23,10 @@ sqlx = { version = "0.8.6", features = [
     "macros",
 ] }
 chrono = { version = "0.4.44", features = ["serde"] }
-uuid = { version = "1", features = ["serde"] }
-tracing = "0.1.44"
+uuid = { version = "1.22.0", features = ["serde"] }
+tracing = { version = "0.1.44" }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 sha2 = { version = "0.10.9" }
+futures-util = { version = "0.3.32" }
+hex = { version = "0.4.3" }
+tokio-postgres = { version = "0.7.16" }
