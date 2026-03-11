@@ -43,7 +43,7 @@ balances, recent transactions).
    server timestamp, cryptographically signs it using HMAC-SHA256 with a secret
    server key, and returns it to the client via a custom HTTP header:
    `X-Keva-Sync-Token: <timestamp>.<signature>`.
-2. **The Client Contract:** The client application (Mobile App, finPOS terminal)
+2. **The Client Contract:** The client application (Mobile App, web app)
    must store this token and attach it to subsequent `GET` requests for bounded
    domains (like `/balance`).
 3. **The Read Middleware:** When a read request arrives, the API middleware

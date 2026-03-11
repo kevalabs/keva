@@ -10,7 +10,7 @@ The `keva-worker` is a highly-available, background Rust daemon. Its primary res
 
 To support multi-container deployments without duplicating WAL consumption, the worker utilizes PostgreSQL Advisory Locks.
 
-* **Active Leader:** Acquires a transaction-level lock (e.g., `pg_try_advisory_lock`), establishes the replication connection, and consumes the WAL.
+* **Active Leader:** Acquires a session-level lock (e.g., `pg_try_advisory_lock`), establishes the replication connection, and consumes the WAL.
 * **Passive Follower:** Fails to acquire the lock, enters a sleep loop, and polls periodically to take over if the Active Leader crashes.
 
 ### 2.2 The Publication Filter
